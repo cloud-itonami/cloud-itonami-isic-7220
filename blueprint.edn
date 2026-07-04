@@ -1,4 +1,4 @@
-{:itonami.blueprint/id "cloud-itonami-7220"
+{:itonami.blueprint/id "cloud-itonami-isic-7220"
  :itonami.blueprint/name "Research and experimental development on social sciences and humanities"
  :itonami.blueprint/isic-rev5 "7220"
  :itonami.blueprint/domain :professional/rd-social-sciences

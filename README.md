@@ -1,4 +1,4 @@
-# cloud-itonami-7220
+# cloud-itonami-isic-7220
 
 Open Business Blueprint for **ISIC Rev.5 7220**: Research and experimental development on social sciences and humanities.
 

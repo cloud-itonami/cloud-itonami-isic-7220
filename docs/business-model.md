@@ -2,7 +2,7 @@
 
 ## Classification
 
-- Repository: `cloud-itonami-7220`
+- Repository: `cloud-itonami-isic-7220`
 - ISIC Rev.5: `7220`
 - Activity: research and experimental development on social sciences and humanities -- systematic study to increase knowledge of society, behavior, culture and history
 - Social impact: professional standards, data sovereignty, transparent audit
