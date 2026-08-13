@@ -239,7 +239,15 @@
       (str/replace "<" "&lt;")
       (str/replace ">" "&gt;")))
 
-(defn- kw [v] (if (keyword? v) (name v) (str v)))
+(defn- kw
+  "Renders a keyword WITH its namespace (`:risk/screen` -> `risk/screen`).
+  `name` would drop it, which collapses genuinely different ops onto the
+  same label -- `:risk/screen` and `:ethics/screen` both became `screen`,
+  and `:protocol/set`/`:risk-screen/set`/`:ethics-screen/set` all became
+  `set`, so the phase matrix showed two identical rows. Non-keywords pass
+  through untouched (`:cites` carries legal-basis strings and study ids)."
+  [v]
+  (if (keyword? v) (subs (str v) 1) (str v)))
 
 (defn- joined [coll]
   (if (seq coll) (str/join ", " (map kw coll)) "—"))
