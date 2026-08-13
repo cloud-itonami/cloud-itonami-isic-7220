@@ -1,0 +1,614 @@
+(ns socialresearch.render-html
+  "Build-time HTML renderer for `docs/samples/operator-console.html`.
+
+  Closes flagship checklist item 2 for this repo: before this
+  namespace existed there was NO demo page and NO generator here at
+  all. Everything the page shows is derived from a REAL run of this
+  repo's own actor stack -- `socialresearch.operation` (langgraph
+  StateGraph) -> `socialresearch.governor` (Research Integrity
+  Governor) -> `socialresearch.store` (MemStore SSoT) -- driven by a
+  scenario built on this repo's own seeded studies
+  (`socialresearch.store/demo-data`: `study-1`..`study-5`, the same
+  ids `socialresearch.sim` uses). No hand-typed rows, no invented
+  lab names, jurisdictions, replication counts or report numbers.
+
+  Three things on this page are computed by CALLING the real code
+  rather than describing it:
+
+    - the phase-gate matrix invokes `socialresearch.phase/gate`
+      once per (op, phase) pair, so it cannot drift from the gate;
+    - the jurisdiction table reads `socialresearch.facts/catalog`
+      and `socialresearch.facts/coverage` for exactly the
+      jurisdictions the seeded studies actually declare, so an
+      uncatalogued jurisdiction shows up as missing rather than
+      silently disappearing;
+    - the approver-attribution table INSPECTS each committed store
+      register for an `:approved-by` key instead of asserting what
+      the store does. If someone changes `commit-record!`, this
+      table changes with it -- a hardcoded claim would become a lie.
+
+  Determinism: no timestamps and no wall-clock anywhere in the page;
+  all collections are rendered in a sorted or run order. Two
+  consecutive runs are byte-identical (verify by diffing).
+
+  Build-time invariant: `-main` THROWS if the real governor produced
+  zero `:governor-hold` facts, or if any hold arrived with an empty
+  violation list. A console that shows no enforcement is not evidence
+  of enforcement, so it is not allowed to be written.
+
+  Usage: `clojure -M:dev:render-html [out-file]`
+  (default `docs/samples/operator-console.html`)."
+  (:require [clojure.string :as str]
+            [jp-go-dds.skin]
+            [langgraph.graph :as g]
+            [socialresearch.facts :as facts]
+            [socialresearch.governor :as governor]
+            [socialresearch.operation :as op]
+            [socialresearch.phase :as phase]
+            [socialresearch.store :as store]))
+
+(def ^:private operator
+  "The human operator identity every run in this scenario is executed
+  under -- the same shape `socialresearch.sim` uses."
+  {:actor-id "op-1" :actor-role :research-operator :phase 3})
+
+;; ----------------------------- the real run -----------------------------
+
+(defn- exec! [actor tid request]
+  (g/run* actor {:request request :context operator} {:thread-id tid}))
+
+(defn- resume! [actor tid decision]
+  (g/run* actor {:approval decision} {:thread-id tid :resume? true}))
+
+(defn run-demo!
+  "Drives the REAL actor over this repo's own seeded studies and
+  returns {:db store :runs [..]}, where each run records the request
+  that was submitted and every graph state it produced.
+
+  The scenario is chosen so that all SIX of the governor's HARD rules
+  actually fire, plus one human rejection and one full clean
+  lifecycle:
+
+    study-1 (JPN, replicated 5 >= minimum 3, human-subjects review
+             confirmed, no unresolved reproducibility risk)
+      intake (auto-commits at phase 3 -- the only auto-eligible op)
+      -> protocol verification (approved) -> reproducibility-risk
+      screening (approved) -> human-subjects-review screening
+      (approved) -> findings-report publication (ALWAYS escalates;
+      approved, mints report JPN-RPT-000000) -> a SECOND publication
+      attempt, HARD-held `:already-published`.
+
+    study-2 (ATL -- a jurisdiction deliberately absent from
+             `socialresearch.facts/catalog`)
+      protocol verification HARD-held `:no-spec-basis`; a
+      reproducibility screening that the governor CLEARS but the human
+      operator then REJECTS (the one disposition a human controls).
+
+    study-3 (JPN, replicated 1 < minimum 3)
+      protocol verification (approved) -> publication HARD-held
+      `:replication-count-insufficient`, recomputed independently by
+      the governor from the study's own two counts.
+
+    study-4 (JPN, `:data-reproducibility-risk-unresolved? true`)
+      reproducibility screening HARD-held on its own finding
+      `:data-reproducibility-risk-unresolved`; a publication attempt
+      with no protocol on file HARD-held `:evidence-incomplete`.
+
+    study-5 (JPN, human subjects, review unconfirmed)
+      human-subjects-review screening HARD-held
+      `:human-subjects-review-unconfirmed`.
+
+  Every HARD hold above never reaches a human at all."
+  []
+  (let [db    (store/seed-db)
+        actor (op/build db)
+        runs  (atom [])
+        step! (fn [label tid request & [decision]]
+                (let [first-state (exec! actor tid request)
+                      resumed     (when decision (resume! actor tid decision))]
+                  (swap! runs conj
+                         {:label    label
+                          :thread   tid
+                          :request  request
+                          :decision decision
+                          :states   (cond-> [first-state] resumed (conj resumed))})
+                  nil))
+        approve  {:status :approved :by "op-1"}
+        reject   {:status :rejected :by "op-1"}]
+
+    ;; --- study-1: the full clean lifecycle -------------------------------
+    (step! "study-1 intake" "s1-intake"
+           {:op :study/intake :subject "study-1"
+            :patch {:id "study-1" :lab-name "Yamada Social Research Institute"}})
+    (step! "study-1 protocol verification" "s1-protocol"
+           {:op :protocol/verify :subject "study-1"} approve)
+    (step! "study-1 reproducibility screening" "s1-risk"
+           {:op :risk/screen :subject "study-1"} approve)
+    (step! "study-1 human-subjects-review screening" "s1-ethics"
+           {:op :ethics/screen :subject "study-1"} approve)
+    (step! "study-1 findings-report publication" "s1-publish"
+           {:op :actuation/publish-findings-report :subject "study-1"} approve)
+    (step! "study-1 publication, second attempt" "s1-republish"
+           {:op :actuation/publish-findings-report :subject "study-1"})
+
+    ;; --- study-2: uncatalogued jurisdiction, and a human rejection --------
+    (step! "study-2 protocol verification" "s2-protocol"
+           {:op :protocol/verify :subject "study-2"})
+    (step! "study-2 reproducibility screening" "s2-risk"
+           {:op :risk/screen :subject "study-2"} reject)
+
+    ;; --- study-3: under-replicated ---------------------------------------
+    (step! "study-3 protocol verification" "s3-protocol"
+           {:op :protocol/verify :subject "study-3"} approve)
+    (step! "study-3 findings-report publication" "s3-publish"
+           {:op :actuation/publish-findings-report :subject "study-3"})
+
+    ;; --- study-4: unresolved reproducibility risk, missing evidence -------
+    (step! "study-4 reproducibility screening" "s4-risk"
+           {:op :risk/screen :subject "study-4"})
+    (step! "study-4 findings-report publication" "s4-publish"
+           {:op :actuation/publish-findings-report :subject "study-4"})
+
+    ;; --- study-5: unconfirmed human-subjects review -----------------------
+    (step! "study-5 human-subjects-review screening" "s5-ethics"
+           {:op :ethics/screen :subject "study-5"})
+
+    {:db db :runs @runs}))
+
+;; ----------------------------- derivation -----------------------------
+
+(defn- final-state [{:keys [states]}] (:state (last states)))
+(defn- first-state [{:keys [states]}] (:state (first states)))
+
+(defn- run-audit [{:keys [states]}] (mapcat (comp :audit :state) states))
+
+(defn- audit-of-type [runs t]
+  (filter #(= t (:t %)) (mapcat run-audit runs)))
+
+(defn- governor-holds
+  "Every `:governor-hold` fact the ledger actually received. These are
+  the HARD, un-overridable rejections -- the ones that never reach a
+  human."
+  [ledger]
+  (filter #(= :governor-hold (:t %)) ledger))
+
+(defn- hold-rule-summary
+  "Groups the real `:governor-hold` facts by the rule that fired."
+  [ledger]
+  (->> (governor-holds ledger)
+       (mapcat (fn [f] (map (fn [v] (assoc v :subject (:subject f) :op (:op f)))
+                            (:violations f))))
+       (group-by :rule)
+       (sort-by (comp name key))
+       (map (fn [[rule vs]]
+              {:rule rule
+               :count (count vs)
+               :subjects (vec (sort (distinct (map :subject vs))))
+               :ops (vec (sort-by name (distinct (map :op vs))))
+               :detail (:detail (first vs))}))))
+
+(defn- last-ledger-fact [ledger study-id]
+  (last (filter #(= study-id (:subject %)) ledger)))
+
+(defn- seeded-jurisdictions
+  "The jurisdictions the seeded studies actually declare -- not a
+  hand-written list."
+  [db]
+  (vec (sort (distinct (keep :jurisdiction (store/all-studies db))))))
+
+(defn- approver-probe
+  "Measures, rather than asserts, whether the approver identity that
+  the human handed to `:request-approval` is retrievable afterwards
+  from the store register the commit wrote.
+
+  Returns one row per approved run: what the audit recorded, and what
+  the register actually retains."
+  [db runs]
+  (for [r     runs
+        :when (= :approved (:status (:decision r)))
+        :let  [subject (:subject (:request r))
+               op      (:op (:request r))
+               record  (:record (final-state r))
+               effect  (:effect record)
+               granted (first (filter #(= :approval-granted (:t %)) (run-audit r)))
+               register (case effect
+                          :protocol/set      {:name "protocols" :value (store/protocol-of db subject)}
+                          :risk-screen/set   {:name "risk-screens" :value (store/risk-screen-of db subject)}
+                          :ethics-screen/set {:name "ethics-screens" :value (store/ethics-screen-of db subject)}
+                          :study/upsert      {:name "studies" :value (store/study db subject)}
+                          :study/mark-published
+                          {:name "reports"
+                           :value (first (filter #(= subject (get % "study_id"))
+                                                 (store/report-history db)))}
+                          {:name "(none)" :value nil})
+               retained (when (map? (:value register))
+                          (:approved-by (:value register)))]]
+    {:op op
+     :subject subject
+     :effect effect
+     :register (:name register)
+     :audit-approver (:by granted)
+     :payload-approver (:approved-by (:payload record))
+     :retained retained}))
+
+;; ----------------------------- rendering -----------------------------
+
+(defn- esc [v]
+  (-> (str v)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")))
+
+(defn- kw [v] (if (keyword? v) (name v) (str v)))
+
+(defn- joined [coll]
+  (if (seq coll) (str/join ", " (map kw coll)) "—"))
+
+(defn- code [v] (str "<code>" (esc (kw v)) "</code>"))
+
+(defn- yes-no [b yes-cls no-cls yes-txt no-txt]
+  (if b
+    (str "<span class=\"" yes-cls "\">" yes-txt "</span>")
+    (str "<span class=\"" no-cls "\">" no-txt "</span>")))
+
+(defn- tr [& cells]
+  (str "        <tr>" (str/join (map #(str "<td>" % "</td>") cells)) "</tr>"))
+
+(defn- table [headers rows]
+  (str "    <table>\n"
+       "      <thead><tr>"
+       (str/join (map #(str "<th>" (esc %) "</th>") headers))
+       "</tr></thead>\n"
+       "      <tbody>\n"
+       (str/join "\n" rows) "\n"
+       "      </tbody>\n"
+       "    </table>\n"))
+
+(defn- section [title lede body]
+  (str "  <section class=\"card\">\n"
+       "    <h2>" (esc title) "</h2>\n"
+       (if lede (str "    <p class=\"muted\">" lede "</p>\n") "")
+       body
+       "  </section>\n"))
+
+;; --- 1. studies ---------------------------------------------------------
+
+(defn- study-status-cell [ledger id]
+  (let [f (last-ledger-fact ledger id)]
+    (cond
+      (nil? f) "<span class=\"muted\">no activity</span>"
+      (= :committed (:t f)) "<span class=\"ok\">committed</span>"
+      (= :approval-rejected (:t f)) "<span class=\"warn\">rejected by operator</span>"
+      (= :governor-hold (:t f))
+      (str "<span class=\"critical\">HARD hold &middot; "
+           (esc (joined (:basis f))) "</span>")
+      :else (str "<span class=\"muted\">" (esc (kw (:t f))) "</span>"))))
+
+(defn- studies-table [db ledger]
+  (table ["Study" "Lab" "Jurisdiction" "Replication (actual / min)"
+          "Human subjects" "Reproducibility risk" "Ethics review"
+          "Findings report" "Last ledger fact"]
+         (for [{:keys [id lab-name jurisdiction actual-replication-count
+                       minimum-required-replication-count
+                       involves-human-subjects? human-subjects-review-confirmed?
+                       data-reproducibility-risk-unresolved?
+                       findings-report-published? report-number]} (store/all-studies db)]
+           (tr (code id)
+               (esc lab-name)
+               (esc jurisdiction)
+               (str (esc actual-replication-count) " / " (esc minimum-required-replication-count)
+                    " "
+                    (if (< actual-replication-count minimum-required-replication-count)
+                      "<span class=\"critical\">insufficient</span>"
+                      "<span class=\"ok\">sufficient</span>"))
+               (yes-no involves-human-subjects? "warn" "muted" "yes" "no")
+               (yes-no data-reproducibility-risk-unresolved? "critical" "ok" "unresolved" "none on file")
+               (cond
+                 (not involves-human-subjects?) "<span class=\"muted\">not applicable</span>"
+                 human-subjects-review-confirmed? "<span class=\"ok\">confirmed</span>"
+                 :else "<span class=\"critical\">unconfirmed</span>")
+               (if findings-report-published?
+                 (str "<span class=\"ok\">published</span> " (code report-number))
+                 "<span class=\"muted\">not published</span>")
+               (study-status-cell ledger id)))))
+
+;; --- 2. operation timeline ----------------------------------------------
+
+(defn- verdict-cell [{:keys [hard? escalate? ok? confidence violations]}]
+  (str (cond
+         hard? (str "<span class=\"critical\">HARD reject</span> &middot; "
+                    (esc (joined (map :rule violations))))
+         escalate? "<span class=\"warn\">escalate</span>"
+         ok? "<span class=\"ok\">clean</span>"
+         :else "<span class=\"muted\">—</span>")
+       " <span class=\"muted\">(confidence " (esc confidence) ")</span>"))
+
+(defn- decision-cell [r]
+  (let [requested (first (filter #(= :approval-requested (:t %)) (run-audit r)))
+        granted   (first (filter #(= :approval-granted (:t %)) (run-audit r)))
+        rejected  (first (filter #(= :approval-rejected (:t %)) (run-audit r)))]
+    (cond
+      granted  (str "<span class=\"ok\">approved by " (esc (:by granted)) "</span>")
+      rejected (str "<span class=\"warn\">rejected by " (esc (:by (:decision r))) "</span>")
+      requested "<span class=\"warn\">awaiting operator</span>"
+      :else "<span class=\"muted\">never reached a human</span>")))
+
+(defn- gate-cell [r]
+  (let [requested (first (filter #(= :approval-requested (:t %)) (run-audit r)))
+        hold      (first (filter #(= :governor-hold (:t %)) (run-audit r)))]
+    (cond
+      (:reason requested) (str (code (:reason requested))
+                               " <span class=\"muted\">at phase " (esc (:phase requested)) "</span>")
+      (:phase-reason hold) (code (:phase-reason hold))
+      :else "<span class=\"muted\">—</span>")))
+
+(defn- timeline-table [runs]
+  (table ["#" "Step" "Op" "Study" "Governor verdict" "Phase gate" "Human decision" "Outcome"]
+         (map-indexed
+          (fn [i r]
+            (let [fs (final-state r)
+                  v  (:verdict (first-state r))
+                  disp (:disposition fs)]
+              (tr (esc (inc i))
+                  (esc (:label r))
+                  (code (:op (:request r)))
+                  (code (:subject (:request r)))
+                  (verdict-cell v)
+                  (gate-cell r)
+                  (decision-cell r)
+                  (case disp
+                    :commit "<span class=\"ok\">committed</span>"
+                    :hold "<span class=\"critical\">held</span>"
+                    :escalate "<span class=\"warn\">escalated</span>"
+                    (str "<span class=\"muted\">" (esc (kw disp)) "</span>")))))
+          runs)))
+
+;; --- 3. HARD holds ------------------------------------------------------
+
+(defn- holds-table [ledger]
+  (table ["HARD rule" "Times fired" "Ops" "Studies" "Governor detail"]
+         (for [{:keys [rule count subjects ops detail]} (hold-rule-summary ledger)]
+           (tr (str "<span class=\"critical\">" (esc (kw rule)) "</span>")
+               (esc count)
+               (str/join " " (map code ops))
+               (str/join " " (map code subjects))
+               (esc detail)))))
+
+;; --- 4. phase gate matrix -----------------------------------------------
+
+(defn- gate-outcome [ph op base]
+  (let [{:keys [disposition reason]} (phase/gate ph {:op op} base)]
+    (str (case disposition
+           :commit "<span class=\"ok\">auto-commit</span>"
+           :escalate "<span class=\"warn\">human approval</span>"
+           :hold "<span class=\"critical\">hold</span>"
+           (esc (kw disposition)))
+         (when reason (str " <span class=\"muted\">" (esc (kw reason)) "</span>")))))
+
+(defn- phase-matrix-table []
+  (let [phs (sort (keys phase/phases))
+        ops (sort-by kw phase/write-ops)]
+    (table (concat ["Op" "High-stakes actuation"]
+                   (for [p phs] (str "phase " p " (" (:label (get phase/phases p)) ")")))
+           (for [o ops]
+             (apply tr
+                    (concat [(code o)
+                             (yes-no (contains? governor/high-stakes o)
+                                     "critical" "muted"
+                                     "always human, at every phase" "—")]
+                            (for [p phs] (gate-outcome p o :commit))))))))
+
+;; --- 5. jurisdictions ---------------------------------------------------
+
+(defn- jurisdiction-table [db]
+  (table ["Jurisdiction" "Spec-basis" "Research-integrity authority / legal basis"
+          "Human-subjects-review authority / legal basis" "Required evidence"]
+         (for [iso3 (seeded-jurisdictions db)
+               :let [sb (facts/spec-basis iso3)]]
+           (tr (code iso3)
+               (if sb
+                 "<span class=\"ok\">catalogued</span>"
+                 "<span class=\"critical\">absent — proposals HARD-held</span>")
+               (if sb
+                 (str (esc (:owner-authority sb)) "<br><span class=\"muted\">"
+                      (esc (:legal-basis sb)) "</span>")
+                 "<span class=\"muted\">—</span>")
+               (if sb
+                 (str (esc (:ethics-owner-authority sb)) "<br><span class=\"muted\">"
+                      (esc (:ethics-legal-basis sb)) "</span>")
+                 "<span class=\"muted\">—</span>")
+               (if sb
+                 (str/join "<br>" (map esc (:required-evidence sb)))
+                 "<span class=\"muted\">—</span>")))))
+
+;; --- 6. findings-report registry ---------------------------------------
+
+(defn- reports-table [db]
+  (let [records (store/report-history db)]
+    (if (seq records)
+      (table ["Report number" "Kind" "Study" "Jurisdiction" "Immutable"]
+             (for [rec records]
+               (tr (code (get rec "record_id"))
+                   (esc (get rec "kind"))
+                   (code (get rec "study_id"))
+                   (esc (get rec "jurisdiction"))
+                   (yes-no (get rec "immutable") "ok" "muted" "yes" "no"))))
+      "    <p class=\"muted\">No findings report was published in this run.</p>\n")))
+
+;; --- 7. approver attribution -------------------------------------------
+
+(defn- approver-table [db runs]
+  (let [rows (approver-probe db runs)]
+    (table ["Op" "Study" "Store effect" "Register" "Approver in audit"
+            "Approver in commit payload" "Retrievable from the register"]
+           (for [{:keys [op subject effect register audit-approver
+                         payload-approver retained]} rows]
+             (tr (code op) (code subject) (code effect) (code register)
+                 (if audit-approver (esc audit-approver) "<span class=\"muted\">—</span>")
+                 (if payload-approver (esc payload-approver) "<span class=\"muted\">—</span>")
+                 (if retained
+                   (str "<span class=\"ok\">yes &middot; " (esc retained) "</span>")
+                   (str "<span class=\"warn\">no &middot; audit only — "
+                        "not retained in record</span>")))))))
+
+(defn- approver-note
+  "Written from what the probe MEASURED, so it stays true if
+  `commit-record!` is changed."
+  [db runs]
+  (let [rows (approver-probe db runs)
+        kept (filter :retained rows)
+        lost (remove :retained rows)]
+    (str "Measured at render time by reading each committed register back out of "
+         (code 'socialresearch.store) " and looking for an "
+         (code :approved-by) " key — not asserted. "
+         (esc (count rows)) " approved commit(s) in this run: "
+         (esc (count kept)) " retain the approver in the register"
+         (when (seq kept)
+           (str " (" (str/join ", " (map (comp code :effect) (sort-by (comp kw :effect) kept))) ")"))
+         ", " (esc (count lost)) " do not"
+         (when (seq lost)
+           (str " (" (str/join ", " (map (comp code :effect) (sort-by (comp kw :effect) lost))) ")"))
+         ". Where the register does not retain it, the identity below is joined from the "
+         (code :approval-granted) " audit fact and labelled explicitly — a reader must be able "
+         "to tell &ldquo;nobody approved&rdquo; from &ldquo;the store dropped it&rdquo;.")))
+
+;; --- 8. audit ledger ----------------------------------------------------
+
+(defn- ledger-table [ledger]
+  (table ["#" "Fact" "Op" "Study" "Disposition" "Basis / violated rules" "Confidence"]
+         (map-indexed
+          (fn [i {:keys [t op subject disposition basis confidence]}]
+            (tr (esc (inc i))
+                (case t
+                  :committed "<span class=\"ok\">committed</span>"
+                  :governor-hold "<span class=\"critical\">governor-hold</span>"
+                  :approval-rejected "<span class=\"warn\">approval-rejected</span>"
+                  (esc (kw t)))
+                (code op)
+                (code subject)
+                (esc (kw disposition))
+                (esc (joined basis))
+                (if confidence (esc confidence) "<span class=\"muted\">—</span>")))
+          ledger)))
+
+;; ----------------------------- document ---------------------------------
+
+(defn render
+  "Renders the whole console from the real run result
+  ({:db .. :runs ..} produced by `run-demo!`)."
+  [{:keys [db runs]}]
+  (let [ledger (vec (store/ledger db))
+        holds  (governor-holds ledger)
+        cov    (facts/coverage (seeded-jurisdictions db))]
+    (str
+     "<!doctype html>\n"
+     "<html lang=\"en\"><head><meta charset=\"utf-8\">"
+     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+     "<title>cloud-itonami-isic-7220 &middot; social-sciences-and-humanities research</title><style>"
+     (jp-go-dds.skin/dds+skin)
+     "</style></head><body>\n"
+     "<header class=\"bar\">\n"
+     "  <h1>Research and experimental development on social sciences and humanities (ISIC 7220) — Operator Console</h1>\n"
+     "  <span class=\"badge\">read-only sample · governor-gated · findings-report publication is always a human call, at every phase</span>\n"
+     "</header>\n"
+     "<main>\n"
+
+     (section "Studies (SSoT after this run)"
+              (str "Build-time snapshot of <code>socialresearch.store</code> after the scenario below "
+                   "actually ran. Seeded from this repo's own <code>store/demo-data</code>; every "
+                   "lab name, jurisdiction and replication count is seed data, and the report number "
+                   "was minted by <code>socialresearch.registry</code> during the run.")
+              (studies-table db ledger))
+
+     (section "Operation timeline (this run)"
+              (str "One row per <code>socialresearch.operation</code> graph run. The governor verdict "
+                   "and the phase-gate reason are read out of the real graph state; the human decision "
+                   "is the real <code>:approval-granted</code> / <code>:approval-rejected</code> audit "
+                   "fact. Runs with a HARD verdict never reach the approval node at all.")
+              (timeline-table runs))
+
+     (section (str "HARD holds the Research Integrity Governor actually fired "
+                   "(" (count holds) " holds, "
+                   (count (hold-rule-summary ledger)) " distinct rules)")
+              (str "Derived by grouping the <code>:governor-hold</code> facts in the ledger above. "
+                   "These are un-overridable: a human approver never sees them, so there is no "
+                   "approval path past a fabricated jurisdiction spec-basis, missing evidence, an "
+                   "under-replicated study, an unresolved data-reproducibility risk, an unconfirmed "
+                   "human-subjects review, or a double publication. The detail text is the "
+                   "governor's own.")
+              (holds-table ledger))
+
+     (section "Action gate — phase &times; op matrix"
+              (str "Computed by invoking <code>socialresearch.phase/gate</code> once per cell with a "
+                   "governor-clean disposition, so this table cannot drift from the gate it "
+                   "describes. A governor HARD hold stays a hold in every cell regardless. "
+                   "Confidence floor: <code>" (esc governor/confidence-floor) "</code>. Note that "
+                   "<code>:actuation/publish-findings-report</code> is absent from every phase's "
+                   "auto set — including phase 3 — and the governor's high-stakes gate enforces the "
+                   "same invariant independently.")
+              (phase-matrix-table))
+
+     (section "Jurisdiction spec-basis coverage"
+              (str "Read from <code>socialresearch.facts/catalog</code> for exactly the jurisdictions "
+                   "the seeded studies declare. " (esc (:covered cov)) " of "
+                   (esc (:requested cov)) " catalogued"
+                   (when (seq (:missing-jurisdictions cov))
+                     (str "; missing: "
+                          (str/join " " (map code (:missing-jurisdictions cov)))
+                          " — the governor refuses to let the advisor invent requirements for it"))
+                   ".")
+              (jurisdiction-table db))
+
+     (section "Findings-report registry (drafts minted in this run)"
+              (str "Produced by <code>socialresearch.registry/register-findings-report</code> during "
+                   "the commit. Records are unsigned drafts — signature is the research lab's own "
+                   "act, not this actor's.")
+              (reports-table db))
+
+     (section "Approver attribution"
+              (approver-note db runs)
+              (approver-table db runs))
+
+     (section "Audit ledger (this run)"
+              (str "The append-only decision-fact log, exactly as "
+                   "<code>store/append-ledger!</code> received it — "
+                   (esc (count ledger)) " facts.")
+              (ledger-table ledger))
+
+     "</main>\n"
+     "<footer>\n"
+     "  Generated at build time by <code>socialresearch.render-html</code> "
+     "(<code>clojure -M:dev:render-html</code>) from a real "
+     "<code>socialresearch.operation</code> &rarr; <code>socialresearch.governor</code> &rarr; "
+     "<code>socialresearch.store</code> run. No hand-written rows; regenerate to refresh.\n"
+     "</footer>\n"
+     "</body></html>\n")))
+
+;; ----------------------------- entry point ------------------------------
+
+(defn- assert-enforcement!
+  "Build-time invariant: a console that shows no enforcement is not
+  evidence of enforcement. Refuse to write one."
+  [ledger]
+  (let [holds (governor-holds ledger)]
+    (when (empty? holds)
+      (throw (ex-info "refusing to write the console: the real governor produced ZERO :governor-hold facts"
+                      {:ledger-facts (count ledger)
+                       :fact-types (frequencies (map :t ledger))})))
+    (when-let [empty-holds (seq (remove (comp seq :violations) holds))]
+      (throw (ex-info "refusing to write the console: a :governor-hold arrived with no violations"
+                      {:holds (mapv #(select-keys % [:op :subject]) empty-holds)})))
+    holds))
+
+(defn -main [& args]
+  (let [out (or (first args) "docs/samples/operator-console.html")
+        {:keys [db runs] :as result} (run-demo!)
+        ledger (vec (store/ledger db))
+        holds (assert-enforcement! ledger)
+        html (render result)]
+    (spit out html)
+    (println "wrote" out
+             (str "(" (count html) " bytes, " (count runs) " graph runs, "
+                  (count ledger) " ledger facts, " (count holds) " HARD holds over "
+                  (count (hold-rule-summary ledger)) " distinct rules, "
+                  (count (store/report-history db)) " findings-report draft(s))"))))
