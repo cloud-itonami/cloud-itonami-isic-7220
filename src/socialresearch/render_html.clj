@@ -538,7 +538,10 @@
                    "governor's own.")
               (holds-table ledger))
 
-     (section "Action gate — phase &times; op matrix"
+     ;; NOTE: `section` escapes its title, so the title must carry literal
+     ;; characters, never HTML entities -- `&times;` here would reach the
+     ;; page as the visible text "&times;".
+     (section "Action gate — phase × op matrix"
               (str "Computed by invoking <code>socialresearch.phase/gate</code> once per cell with a "
                    "governor-clean disposition, so this table cannot drift from the gate it "
                    "describes. A governor HARD hold stays a hold in every cell regardless. "
