@@ -1,5 +1,5 @@
 (ns socialresearch.sim
-  "Demo driver -- `clojure -M:dev:run`. Walks a clean study through
+  "Demo driver -- `kbb -M:dev:run`. Walks a clean study through
   intake -> protocol verification -> data-reproducibility-risk
   screening -> human-subjects-review screening -> findings-report-
   publication proposal (always escalates) -> human approval -> commit,

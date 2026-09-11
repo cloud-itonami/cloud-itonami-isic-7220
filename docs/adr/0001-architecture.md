@@ -195,7 +195,7 @@ industry` registry's own entry for `"7220"` exactly -- only the
   `test/socialresearch/store_contract_test.cljk`, the same `:db-api`-
   driven swap pattern every sibling actor uses.
 - 34 tests / 159 assertions pass; lint is clean; the demo
-  (`clojure -M:dev:run`) walks one clean actuation lifecycle plus five
+  (`kbb -M:dev:run`) walks one clean actuation lifecycle plus five
   HARD-hold scenarios end-to-end.
 - `blueprint.edn` required no field-sync fixes this time (already
   correct) -- only the `:maturity` flip itself.
