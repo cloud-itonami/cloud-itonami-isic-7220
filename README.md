@@ -140,7 +140,7 @@ phase, by construction.** Two independent layers enforce this
 high-stakes gate and `socialresearch.phase`'s phase table, which never
 puts this op in any phase's `:auto` set) -- see
 `socialresearch.phase`'s docstring and
-`test/socialresearch/phase_test.clj`'s
+`test/socialresearch/phase_test.cljk`'s
 `publish-findings-report-never-auto-at-any-phase`. The actor may
 draft, check and recommend; a human research operator is always the
 one who actually publishes a findings report. Grounded directly in
@@ -229,14 +229,14 @@ reference at all.
 
 | File | Role |
 |---|---|
-| `src/socialresearch/store.cljc` | **Store** protocol -- `MemStore` ‖ `DatomicStore` (`langchain.db`) + append-only audit ledger + findings-report history. The double-actuation guard checks a dedicated `:findings-report-published?` boolean rather than a `:status` value |
-| `src/socialresearch/registry.cljc` | Findings-report draft records, plus `replication-count-insufficient?` -- an HONEST, literal reuse of `research.registry`'s own SEVENTH-instance MINIMUM-threshold sufficiency check, not claimed as new |
-| `src/socialresearch/facts.cljc` | Per-jurisdiction research-integrity catalog AND a SEPARATE human-subjects-research-ethics-review citation per jurisdiction (a genuine extension beyond `research.facts`'s own general-research-misconduct-only catalog) with an official spec-basis citation per entry, honest coverage reporting |
-| `src/socialresearch/studyopsllm.cljc` | **StudyOps-LLM** -- `mock-advisor` ‖ `llm-advisor`; intake/protocol-verification/data-reproducibility-risk-screening/human-subjects-review-screening/findings-report-publication proposals |
-| `src/socialresearch/governor.cljc` | **Research Integrity Governor** -- 5 HARD checks (spec-basis · evidence-incomplete · replication-count-insufficient, honest reuse · data-reproducibility-risk-unresolved, honest reuse · human-subjects-review-unconfirmed, conditional unconditional-evaluation, GENUINELY NEW, the 63rd grounding of this discipline) + 1 guard (already-published) + 1 soft (confidence/actuation gate) |
-| `src/socialresearch/phase.cljc` | **Phase 0→3** -- read-only → assisted intake → assisted verify → supervised (findings-report publication always human; study intake is the ONLY auto-eligible op, no direct capital risk) |
-| `src/socialresearch/operation.cljc` | **OperationActor** -- langgraph StateGraph |
-| `src/socialresearch/sim.cljc` | demo driver |
+| `src/socialresearch/store.cljk` | **Store** protocol -- `MemStore` ‖ `DatomicStore` (`langchain.db`) + append-only audit ledger + findings-report history. The double-actuation guard checks a dedicated `:findings-report-published?` boolean rather than a `:status` value |
+| `src/socialresearch/registry.cljk` | Findings-report draft records, plus `replication-count-insufficient?` -- an HONEST, literal reuse of `research.registry`'s own SEVENTH-instance MINIMUM-threshold sufficiency check, not claimed as new |
+| `src/socialresearch/facts.cljk` | Per-jurisdiction research-integrity catalog AND a SEPARATE human-subjects-research-ethics-review citation per jurisdiction (a genuine extension beyond `research.facts`'s own general-research-misconduct-only catalog) with an official spec-basis citation per entry, honest coverage reporting |
+| `src/socialresearch/studyopsllm.cljk` | **StudyOps-LLM** -- `mock-advisor` ‖ `llm-advisor`; intake/protocol-verification/data-reproducibility-risk-screening/human-subjects-review-screening/findings-report-publication proposals |
+| `src/socialresearch/governor.cljk` | **Research Integrity Governor** -- 5 HARD checks (spec-basis · evidence-incomplete · replication-count-insufficient, honest reuse · data-reproducibility-risk-unresolved, honest reuse · human-subjects-review-unconfirmed, conditional unconditional-evaluation, GENUINELY NEW, the 63rd grounding of this discipline) + 1 guard (already-published) + 1 soft (confidence/actuation gate) |
+| `src/socialresearch/phase.cljk` | **Phase 0→3** -- read-only → assisted intake → assisted verify → supervised (findings-report publication always human; study intake is the ONLY auto-eligible op, no direct capital risk) |
+| `src/socialresearch/operation.cljk` | **OperationActor** -- langgraph StateGraph |
+| `src/socialresearch/sim.cljk` | demo driver |
 | `test/socialresearch/*_test.clj` | governor contract · phase invariants · store parity · registry conformance · facts coverage |
 
 ## Business-process coverage (honest)
