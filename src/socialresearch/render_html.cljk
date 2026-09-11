@@ -36,7 +36,7 @@
   violation list. A console that shows no enforcement is not evidence
   of enforcement, so it is not allowed to be written.
 
-  Usage: `clojure -M:dev:render-html [out-file]`
+  Usage: `kbb -M:dev:render-html [out-file]`
   (default `docs/samples/operator-console.html`)."
   (:require [kotoba.lang.text :as str]
             [jp-go-dds.skin]
@@ -589,7 +589,7 @@
      "</main>\n"
      "<footer>\n"
      "  Generated at build time by <code>socialresearch.render-html</code> "
-     "(<code>clojure -M:dev:render-html</code>) from a real "
+     "(<code>kbb -M:dev:render-html</code>) from a real "
      "<code>socialresearch.operation</code> &rarr; <code>socialresearch.governor</code> &rarr; "
      "<code>socialresearch.store</code> run. No hand-written rows; regenerate to refresh.\n"
      "</footer>\n"
