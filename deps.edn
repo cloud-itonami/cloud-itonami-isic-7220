@@ -26,7 +26,7 @@
        io.github.kotoba-lang/langgraph
         {:local/root "../../kotoba-lang/langgraph"}
         ;; jp-go-dds: デジタル庁デザインシステム — the workspace-wide base
-        ;; design system (CLAUDE.md, 2026-08-05). Used by
+        ;; design system (AGENTS.md, 2026-08-05). Used by
         ;; socialresearch.render-html to style docs/samples/operator-console.html.
         ;; Git coordinate (not :local/root) so a standalone fork still builds.
         io.github.kotoba-lang/jp-go-digital-design-system
